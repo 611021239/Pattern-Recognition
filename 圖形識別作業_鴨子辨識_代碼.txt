@@ -1,0 +1,391 @@
+#include <iostream>
+#include <random>
+#include <chrono>
+#include <cmath>
+#include <opencv2\opencv.hpp>
+using namespace std;
+using namespace cv;
+
+//二維矩陣類
+class matrix_2d {
+public:
+	int** m_ptr;
+	int m_row;
+	int m_col;
+	matrix_2d() {
+		this->m_ptr = NULL;
+		this->m_row = 0;
+		this->m_col = 0;
+	}
+	//構造函數建立動態矩陣
+	matrix_2d(int row, int col) {
+		this->m_ptr = new int* [row];
+		for (int i = 0; i < row; i++) {
+			m_ptr[i] = new int[col];
+		}
+		this->m_row = row;
+		this->m_col = col;
+		for (int i = 0; i < row; i++) {
+			for (int j = 0; j < col; j++) {
+				this->m_ptr[i][j] = 0;
+			}
+		}
+	}
+	//析構函數釋放矩陣
+	~matrix_2d() {
+		if (this->m_ptr != NULL) {
+			for (int i = 0; i < this->m_row; i++) {
+				delete[] this->m_ptr[i];
+			}
+			delete[] this->m_ptr;
+			this->m_ptr = NULL;
+		}
+	}
+	//刪除矩陣
+	void matrix_2d_del() {
+		if (this->m_ptr != NULL) {
+			for (int i = 0; i < this->m_row; i++) {
+				delete[] this->m_ptr[i];
+			}
+			delete[] this->m_ptr;
+			this->m_ptr = NULL;
+		}
+	}
+};
+
+//三維矩陣類
+class matrix_3d {
+public:
+	int*** m_ptr;
+	int m_row;
+	int m_col;
+	int m_hig;
+	matrix_3d() {
+		this->m_ptr = NULL;
+		this->m_row = 0;
+		this->m_col = 0;
+		this->m_hig = 0;
+	}
+	//構造函數建立動態矩陣
+	matrix_3d(int row, int col, int hig) {
+		this->m_ptr = new int** [row];
+		for (int i = 0; i < row; i++) {
+			m_ptr[i] = new int* [col];
+			for (int j = 0; j < col; j++) {
+				m_ptr[i][j] = new int[hig];
+			}
+		}
+		this->m_row = row;
+		this->m_col = col;
+		this->m_hig = hig;
+		for (int i = 0; i < row; i++) {
+			for (int j = 0; j < col; j++) {
+				for (int k = 0; k < hig; k++) {
+					this->m_ptr[i][j][k] = 0;
+				}
+			}
+		}
+	}
+	//析構函數釋放矩陣
+	~matrix_3d() {
+		if (this->m_ptr != NULL) {
+			for (int i = 0; i < this->m_row; i++) {
+				for (int j = 0; j < this->m_col; j++) {
+					delete[] this->m_ptr[i][j];
+				}
+				delete[] this->m_ptr[i];
+			}
+			delete[] this->m_ptr;
+			this->m_ptr = NULL;
+		}
+	}
+	//刪除矩陣
+	void matrix_3d_del() {
+		if (this->m_ptr != NULL) {
+			for (int i = 0; i < this->m_row; i++) {
+				for (int j = 0; j < this->m_col; j++) {
+					delete[] this->m_ptr[i][j];
+				}
+				delete[] this->m_ptr[i];
+			}
+			delete[] this->m_ptr;
+			this->m_ptr = NULL;
+		}
+	}
+};
+
+//圖像顯示函式
+void show_image(Mat& src) {
+	namedWindow("full_duck_output", WINDOW_FREERATIO);
+	imshow("full_duck_output", src);
+	waitKey(0);
+	destroyAllWindows();
+}
+
+//預測函式
+void predicting(Mat& Mat_predicting_data, int*** w0_distribution_model, int*** w1_distribution_model) {
+	int predicting_data_height = Mat_predicting_data.rows;
+	int predicting_data_width = Mat_predicting_data.cols;
+	int predicting_data_channel = Mat_predicting_data.channels();
+	Vec3b black(0, 0, 0);
+	int sample[3];
+	for (int i = 0; i < predicting_data_height; i++) {
+		for (int j = 0; j < predicting_data_width; j++) {
+			for (int k = 0; k < predicting_data_channel; k++) {
+				sample[k] = Mat_predicting_data.at<Vec3b>(i, j)[k];
+			}
+			//若非鴨類P(x|w0) > 鴨類P(x|w1) 則指派給非鴨類w0
+			if (w0_distribution_model[sample[0]][sample[1]][sample[2]] > w1_distribution_model[sample[0]][sample[1]][sample[2]]) {
+				Mat_predicting_data.at<Vec3b>(i, j) = black;
+			}
+			//若非鴨類P(x|w0) < 鴨類P(x|w1) 則指派給鴨類w1
+			else if (w0_distribution_model[sample[0]][sample[1]][sample[2]] < w1_distribution_model[sample[0]][sample[1]][sample[2]]) {
+			}
+			//其他情況指派給非鴨類w0
+			else {
+				Mat_predicting_data.at<Vec3b>(i, j) = black;
+			}
+		}
+	}
+}
+
+//降噪函式 策略詳見書面報告
+void noise_reduction(Mat& Mat_target_data, Mat& Mat_original_data, int noise_reduction_distance = 3) {
+	if (noise_reduction_distance > 0) {
+		int target_data_height = Mat_target_data.rows;
+		int target_data_width = Mat_target_data.cols;
+		int target_data_channel = Mat_target_data.channels();
+		Vec3b black(0, 0, 0);
+		for (int i = noise_reduction_distance; i < target_data_height - noise_reduction_distance; i++) {
+			for (int j = noise_reduction_distance; j < target_data_width - noise_reduction_distance; j++) {
+				if (Mat_target_data.at<Vec3b>(i, j) != black &&
+					Mat_target_data.at<Vec3b>(i, j + noise_reduction_distance) == black &&
+					Mat_target_data.at<Vec3b>(i, j - noise_reduction_distance) == black &&
+					Mat_target_data.at<Vec3b>(i + noise_reduction_distance, j) == black &&
+					Mat_target_data.at<Vec3b>(i - noise_reduction_distance, j) == black &&
+					Mat_target_data.at<Vec3b>(i + noise_reduction_distance, j + noise_reduction_distance) == black &&
+					Mat_target_data.at<Vec3b>(i + noise_reduction_distance, j - noise_reduction_distance) == black &&
+					Mat_target_data.at<Vec3b>(i - noise_reduction_distance, j + noise_reduction_distance) == black &&
+					Mat_target_data.at<Vec3b>(i - noise_reduction_distance, j - noise_reduction_distance) == black) {
+					for (int k = 0; k < noise_reduction_distance * 2 - 1; k++) {
+						for (int l = 0; l < noise_reduction_distance * 2 - 1; l++) {
+							Mat_target_data.at<Vec3b>(i - noise_reduction_distance + 1 + k, j - noise_reduction_distance + 1 + l) = black;
+						}
+					}
+				}
+				else if (Mat_target_data.at<Vec3b>(i, j) == black &&
+					Mat_target_data.at<Vec3b>(i, j + (noise_reduction_distance - 1)) != black &&
+					Mat_target_data.at<Vec3b>(i, j - (noise_reduction_distance - 1)) != black &&
+					Mat_target_data.at<Vec3b>(i + (noise_reduction_distance - 1), j) != black &&
+					Mat_target_data.at<Vec3b>(i - (noise_reduction_distance - 1), j) != black &&
+					Mat_target_data.at<Vec3b>(i + (noise_reduction_distance - 1), j + (noise_reduction_distance - 1)) != black &&
+					Mat_target_data.at<Vec3b>(i + (noise_reduction_distance - 1), j - (noise_reduction_distance - 1)) != black &&
+					Mat_target_data.at<Vec3b>(i - (noise_reduction_distance - 1), j + (noise_reduction_distance - 1)) != black &&
+					Mat_target_data.at<Vec3b>(i - (noise_reduction_distance - 1), j - (noise_reduction_distance - 1)) != black) {
+					for (int k = 0; k < (noise_reduction_distance - 1) * 2 - 1; k++) {
+						for (int l = 0; l < (noise_reduction_distance - 1) * 2 - 1; l++) {
+							Mat_target_data.at<Vec3b>(i - (noise_reduction_distance - 1) + 1 + k, j - (noise_reduction_distance - 1) + 1 + l) =
+								Mat_original_data.at<Vec3b>(i - (noise_reduction_distance - 1) + 1 + k, j - (noise_reduction_distance - 1) + 1 + l);
+						}
+					}
+				}
+			}
+		}
+	}
+	else {
+		cout << "error parameter：noise_reduction_distance must be > 0" << endl;
+	}
+}
+
+//模型評估函數
+void model_evaluation_confusion_matrix(Mat& Mat_evaluation_data) {
+	int evaluation_data_height = Mat_evaluation_data.rows;
+	int evaluation_data_width = Mat_evaluation_data.cols;
+	int evaluation_channel = Mat_evaluation_data.channels();
+	Vec3b black(0, 0, 0);
+	double FP = 0;
+	double TN = 0;
+	double TP = 0;
+	double FN = 0;
+	for (int i = 0; i < evaluation_data_height / 2; i++) {
+		for (int j = 0; j < evaluation_data_width; j++) {
+			if (Mat_evaluation_data.at<Vec3b>(i, j) != black) {
+				FP++;
+			}
+			else {
+				TN++;
+			}
+		}
+	}
+	for (int i = evaluation_data_height / 2; i < evaluation_data_height; i++) {
+		for (int j = 0; j < evaluation_data_width; j++) {
+			if (Mat_evaluation_data.at<Vec3b>(i, j) != black) {
+				TP++;
+			}
+			else {
+				FN++;
+			}
+		}
+	}
+	double P = TP + FN;
+	double P_ = TP + FP;
+	double N = FP + TN;
+	double N_ = FN + TN;
+	double ALL = TP + FN + FP + TN;
+	double Accuracy = (TP + TN) / ALL;
+	double Error_Rate = (FP + FN) / ALL;
+	double Sensitivity = TP / P;
+	double Specificity = TN / N;
+	double Precision = TP / (TP + FP);
+	double Recall = TP / (TP + FN);
+	cout << "TP: " << TP << endl;
+	cout << "FN: " << FN << endl;
+	cout << "FP: " << FP << endl;
+	cout << "TN: " << TN << endl;
+	cout << "ALL" << ALL << endl;
+	cout << "P: " << P << endl;
+	cout << "P_: " << P_ << endl;
+	cout << "N: " << N << endl;
+	cout << "N_: " << N_ << endl;
+	cout << "Accuracy: " << Accuracy << endl;
+	cout << "Error Rate: " << Error_Rate << endl;
+	cout << "Sensitivity: " << Sensitivity << endl;
+	cout << "Specificity: " << Specificity << endl;
+	cout << "Precision: " << Precision << endl;
+	cout << "Recall: " << Recall << endl;
+}
+
+int main(int argc, char** argv) {
+
+	//建立訓練資料
+	Mat Mat_training_data = imread("./image_training.jpg");
+	int training_data_height = Mat_training_data.rows;
+	int training_data_width = Mat_training_data.cols;
+	int training_data_channel = Mat_training_data.channels();
+
+	//建立兩類容器
+	matrix_2d w0((training_data_height / 2) * training_data_width, training_data_channel);
+	matrix_2d w1((training_data_height / 2) * training_data_width, training_data_channel);
+	double w0_mean[3] = { 0, 0, 0 };
+	double w1_mean[3] = { 0, 0, 0 };
+	double w0_variance[3] = { 0, 0, 0 };
+	double w1_variance[3] = { 0, 0, 0 };
+	double w0_stddev[3] = { 0, 0, 0 };
+	double w1_stddev[3] = { 0, 0, 0 };
+
+	//將訓練資料的非鴨類BGR存入w0
+	int n = 0;
+	for (int i = 0; i < training_data_height / 2; i++) {
+		for (int j = 0; j < training_data_width; j++) {
+			for (int k = 0; k < training_data_channel; k++) {
+				w0.m_ptr[n][k] = (Mat_training_data.at<Vec3b>(i, j)[k]);
+			}
+			n++;
+		}
+	}
+	//將訓練資料的鴨類BGR存入w1
+	n = 0;
+	for (int i = training_data_height / 2; i < training_data_height; i++) {
+		for (int j = 0; j < training_data_width; j++) {
+			for (int k = 0; k < training_data_channel; k++) {
+				w1.m_ptr[n][k] = (Mat_training_data.at<Vec3b>(i, j)[k]);
+			}
+			n++;
+		}
+	}
+
+	//釋放訓練資料Mat_training_data
+	Mat_training_data.release();
+
+	//計算兩類平均值
+	for (int i = 0; i < 120 * 24; i++) {
+		for (int j = 0; j < training_data_channel; j++) {
+			w0_mean[j] += w0.m_ptr[i][j];
+			w1_mean[j] += w1.m_ptr[i][j];
+		}
+	}
+	for (int i = 0; i < 3; i++) {
+		w0_mean[i] = w0_mean[i] / 2880;
+		w1_mean[i] = w1_mean[i] / 2880;
+	}
+
+	//計算兩類標準差
+	for (int i = 0; i < 120 * 24; i++) {
+		for (int j = 0; j < training_data_channel; j++) {
+			w0_variance[j] += (w0.m_ptr[i][j] - w0_mean[j]) * (w0.m_ptr[i][j] - w0_mean[j]);
+			w1_variance[j] += (w1.m_ptr[i][j] - w1_mean[j]) * (w1.m_ptr[i][j] - w1_mean[j]);
+		}
+	}
+	for (int i = 0; i < training_data_channel; i++) {
+		w0_variance[i] = w0_variance[i] / 2880;
+		w1_variance[i] = w1_variance[i] / 2880;
+	}
+	for (int i = 0; i < training_data_channel; i++) {
+		w0_stddev[i] = sqrt(w0_variance[i]);
+		w1_stddev[i] = sqrt(w1_variance[i]);
+	}
+
+	//刪除矩陣w0, w1 釋放記憶體
+	w0.matrix_2d_del();
+	w1.matrix_2d_del();
+
+	//建立兩類常態分布模型P(x|w0) P(x|w1) 參數使用訓練資料進行極大似然估計獲取
+	matrix_3d w0_distribution_model(256, 256, 256);
+	matrix_3d w1_distribution_model(256, 256, 256);
+
+	unsigned seed = chrono::system_clock::now().time_since_epoch().count();
+	default_random_engine generator(seed);
+
+	normal_distribution<double> w0_distribution_b(w0_mean[0], w0_stddev[0]);
+	normal_distribution<double> w0_distribution_g(w0_mean[1], w0_stddev[1]);
+	normal_distribution<double> w0_distribution_r(w0_mean[2], w0_stddev[2]);
+	normal_distribution<double> w1_distribution_b(w1_mean[0], w1_stddev[0]);
+	normal_distribution<double> w1_distribution_g(w1_mean[1], w1_stddev[1]);
+	normal_distribution<double> w1_distribution_r(w1_mean[2], w1_stddev[2]);
+
+	int w0_b, w0_g, w0_r, w1_b, w1_g, w1_r;
+	for (int i = 0; i < 1000000000; i++) {
+		w0_b = (int)w0_distribution_b(generator);
+		w0_g = (int)w0_distribution_g(generator);
+		w0_r = (int)w0_distribution_r(generator);
+		w1_b = (int)w1_distribution_b(generator);
+		w1_g = (int)w1_distribution_g(generator);
+		w1_r = (int)w1_distribution_r(generator);
+		if (w0_b >= 0 && w0_b < 256 && w0_g >= 0 && w0_g < 256 && w0_r >= 0 && w0_r < 256) {
+			w0_distribution_model.m_ptr[w0_b][w0_g][w0_r]++;
+		}
+		if (w1_b >= 0 && w1_b < 256 && w1_g >= 0 && w1_g < 256 && w1_r >= 0 && w1_r < 256) {
+			w1_distribution_model.m_ptr[w1_b][w1_g][w1_r]++;
+		}
+	}
+
+	//建立測試資料
+	Mat Mat_testing_original_data = imread("./image_testing.jpg");
+	Mat Mat_testing_target_data = imread("./image_testing.jpg");
+
+	//建立預測資料
+	Mat Mat_predicting_original_data = imread("./full_duck.jpg");
+	Mat Mat_predicting_target_data = imread("./full_duck.jpg");
+
+	//預測
+	predicting(Mat_predicting_target_data, w0_distribution_model.m_ptr, w1_distribution_model.m_ptr);
+
+	//降噪 策略詳見書面報告
+	noise_reduction(Mat_predicting_target_data, Mat_predicting_original_data, 3);
+
+	//刪除兩類常態分布模型 釋放記憶體
+	w0_distribution_model.matrix_3d_del();
+	w1_distribution_model.matrix_3d_del();
+
+	//模型評估
+	//model_evaluation_confusion_matrix(Mat_testing_target_data);
+
+	//顯示預測圖像
+	show_image(Mat_predicting_target_data);
+
+	//輸出預測圖像
+	imwrite("./full_duck_output.jpg", Mat_predicting_target_data);
+
+	system("pause");
+	return 0;
+}
