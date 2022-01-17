@@ -1,0 +1,237 @@
+#include <iostream>
+#include <string>
+#include <vector>
+#include <opencv2/opencv.hpp>
+#include <opencv2/ml.hpp>
+using namespace std;
+using namespace cv;
+using namespace ml;
+
+//參數設定
+#define FEATURE_SELECTION_ROW_BEGIN 0
+#define FEATURE_SELECTION_ROW_END 111
+#define FEATURE_SELECTION_COL_BEGIN 0
+#define FEATURE_SELECTION_COL_END 91
+#define PCA_DIMENSION 40
+#define DO_LDA true
+#define CLASSIFIER_USE 0  //0為貝葉斯分類器 1為KNN分類器
+#define K 1  //KNN分類器K參數
+
+//圖像顯示函式
+void show_image(Mat& src) {
+	namedWindow("full_duck_output", WINDOW_FREERATIO);
+	imshow("full_duck_output", src);
+	waitKey(0);
+	destroyAllWindows();
+}
+
+//圖像資訊打印函式
+void print_image_information(Mat& src) {
+	cout << "cols: " << src.cols << endl;
+	cout << "rows: " << src.rows << endl;
+	cout << "channels: " << src.channels() << endl;
+}
+
+//依據second值做升序排列
+bool cmp2(pair<int, float>a, pair<int, float>b) {
+	return a.second < b.second;
+}
+
+//混淆矩陣函式
+void model_evaluation_confusion_matrix(string model_name, int* actual_ptr, int* predicted_ptr) {
+	cout << "Model name: " << model_name << endl;
+	cout << "PCA reduction dimension: " << PCA_DIMENSION << endl;
+	cout << "Do LDA: " << DO_LDA << endl;
+	cout << "--------------------------------------------------------------------------------" << endl;
+	float accuracy = 0;
+	for (int i = 0; i < 200; i++) {
+		cout << "testing data no:  " << i << "		" << "actual class:  " << actual_ptr[i] << "	" << "predict class:  " << predicted_ptr[i] << endl;
+		if (actual_ptr[i] == predicted_ptr[i]) {
+			accuracy = accuracy + 1;
+		}
+	}
+	accuracy = accuracy / 200;
+	cout << "--------------------------------------------------------------------------------" << endl;
+	cout << "Accuracy: " << accuracy << endl;
+	cout << "================================================================================" << endl;
+}
+
+//貝葉斯分類函式
+void bayes_classifier(Mat& Mat_training_data, Mat& Mat_testing_data) {
+	int labels[200];
+	for (int i = 0; i < 200; i++) {
+		labels[i] = i / 5;
+	}
+	Mat Mat_labels(200, 1, CV_32SC1, labels);
+
+	Mat Mat_sample_data;
+	if (PCA_DIMENSION > 39 && DO_LDA == true) {
+		Mat_sample_data = Mat::zeros(Size(39, 1), CV_32FC1);
+	}
+	else {
+		Mat_sample_data = Mat::zeros(Size(PCA_DIMENSION, 1), CV_32FC1);
+	}
+
+	Ptr<NormalBayesClassifier>normalBayes = NormalBayesClassifier::create();
+	normalBayes->train(Mat_training_data, SampleTypes::ROW_SAMPLE, Mat_labels);
+
+	int* bayes_actual_ptr = new int[200];
+	int* bayes_predicted_ptr = new int[200];
+	for (int i = 0; i < 200; i++) {
+		for (int j = 0; j < PCA_DIMENSION; j++) {
+			Mat_sample_data.at<float>(0, j) = Mat_testing_data.at<float>(i, j);
+		}
+		bayes_predicted_ptr[i] = normalBayes->predict(Mat_sample_data);
+		bayes_actual_ptr[i] = i / 5;
+	}
+	model_evaluation_confusion_matrix("NormalBayesClassifier", bayes_actual_ptr, bayes_predicted_ptr);
+	delete[] bayes_actual_ptr;
+	bayes_actual_ptr = NULL;
+	delete[] bayes_predicted_ptr;
+	bayes_actual_ptr = NULL;
+}
+
+//KNN分類(曼哈頓距離)函式
+void knn_classifier(Mat& Mat_training_data, Mat& Mat_testing_data) {
+	vector<pair<int, float>> Vector_distance;
+	float manhattan_distance = 0;
+	int* knn_actual_ptr = new int[200];
+	int* knn_predicted_ptr = new int[200];
+
+	int dimension;
+	if (PCA_DIMENSION > 39 && DO_LDA == true) {
+		dimension = 39;
+	}
+	else {
+		dimension = PCA_DIMENSION;
+	}
+
+	for (int i = 0; i < 200; i++) {
+		for (int j = 0; j < 200; j++) {
+			for (int k = 0; k < dimension; k++) {
+				//計算測試樣本i與訓練樣本j的曼哈頓距離
+				manhattan_distance += fabs(Mat_testing_data.at<float>(i, k) - Mat_training_data.at<float>(j, k));
+			}
+			//將測試樣本i與訓練樣本j的曼哈頓距離壓入陣列Vector_distance
+			Vector_distance.push_back({ j, manhattan_distance });
+			manhattan_distance = 0;
+		}
+		//將測試樣本i與全部訓練樣本的曼哈頓距離做升序排列
+		sort(Vector_distance.begin(), Vector_distance.end(), cmp2);
+		//訪問K個近鄰 並逐次將其所屬類號在count陣列對應下標++
+		int count[40] = { 0 };
+		auto it = Vector_distance.begin();
+		int k = 0;
+		while (k < K) {
+			it++;
+			k++;
+			count[(it->first) / 5]++;
+		}
+
+		knn_actual_ptr[i] = i / 5;
+		//計算count陣列最大值下標 即為測試樣本i預測的類
+		knn_predicted_ptr[i] = max_element(count, count + 40) - count;
+		Vector_distance.clear();
+	}
+
+	model_evaluation_confusion_matrix("Manhattan_KNN_Classifier", knn_actual_ptr, knn_predicted_ptr);
+	delete[] knn_actual_ptr;
+	knn_actual_ptr = NULL;
+	delete[] knn_predicted_ptr;
+	knn_actual_ptr = NULL;
+}
+
+int main(int argc, char** argv) {
+
+	//建立讀取資料容器
+	Mat Mat_data = Mat::zeros(Size(92, 112), CV_8UC1);
+
+	//建立訓練資料與測試資料容器
+	Mat Mat_training_data = Mat::zeros(Size((FEATURE_SELECTION_ROW_END - FEATURE_SELECTION_ROW_BEGIN + 1) * 
+		(FEATURE_SELECTION_COL_END - FEATURE_SELECTION_COL_BEGIN + 1), 200), CV_8UC1);
+	Mat Mat_testing_data = Mat::zeros(Size((FEATURE_SELECTION_ROW_END - FEATURE_SELECTION_ROW_BEGIN + 1) * 
+		(FEATURE_SELECTION_COL_END - FEATURE_SELECTION_COL_BEGIN + 1), 200), CV_8UC1);
+
+	//讀入訓練資料並轉為200 x 10304矩陣
+	int m = 0;
+	int n;
+	for (int i = 1; i <= 40; i++) {
+		for (int j = 1; j <= 5; j++) {
+			string path = "./att_faces/s" + to_string(i) + "/" + to_string(j) + ".pgm";
+			Mat_data = imread(path, 0);
+			//show_image(Mat_data);
+			n = 0;
+			for (int k = FEATURE_SELECTION_ROW_BEGIN; k < FEATURE_SELECTION_ROW_END + 1; k++) {
+				for (int l = FEATURE_SELECTION_COL_BEGIN; l < FEATURE_SELECTION_COL_END + 1; l++) {
+					Mat_training_data.at<uchar>(m, n) = Mat_data.at<uchar>(k, l);
+					n++;
+				}
+			}
+			m++;
+		}
+	}
+
+	//讀入測試資料並轉為200 x 10304矩陣
+	m = 0;
+	for (int i = 1; i <= 40; i++) {
+		for (int j = 6; j <= 10; j++) {
+			string path = "./att_faces/s" + to_string(i) + "/" + to_string(j) + ".pgm";
+			Mat_data = imread(path, 0);
+			//show_image(Mat_data);
+			n = 0;
+			for (int k = FEATURE_SELECTION_ROW_BEGIN; k < FEATURE_SELECTION_ROW_END + 1; k++) {
+				for (int l = FEATURE_SELECTION_COL_BEGIN; l < FEATURE_SELECTION_COL_END + 1; l++) {
+					Mat_testing_data.at<uchar>(m, n) = Mat_data.at<uchar>(k, l);
+					n++;
+				}
+			}
+			m++;
+		}
+	}
+
+	//降維前將Mat型別轉為CV_32FC1
+	Mat_training_data.convertTo(Mat_training_data, CV_32FC1);
+	Mat_testing_data.convertTo(Mat_testing_data, CV_32FC1);
+
+	//資料降維PCA 由200x10304降為200xPCA_DIMENSION
+	PCA pca_training(Mat_training_data, Mat(), 0, PCA_DIMENSION);
+	Mat Mat_training_eigenvectors_pca = pca_training.eigenvectors.clone();
+	Mat Mat_training_data_pca = (Mat_training_eigenvectors_pca * Mat_training_data.t()).t();
+	Mat Mat_testing_data_pca = (Mat_training_eigenvectors_pca * Mat_testing_data.t()).t();
+
+	//資料降維LDA 降為同維度 僅轉換
+	vector<int>vector_labels;
+	for (int i = 0; i < 200; i++) {
+		vector_labels.push_back(i / 5);
+	}
+		//參數3之條件: 1.介於1~C-1  2.樣本數>特徵維數  3.不可高於原本維數
+	LDA lda_training = LDA(Mat_training_data_pca, vector_labels, PCA_DIMENSION);
+	Mat Mat_training_eigenvectors_lda = lda_training.eigenvectors().clone();
+	Mat_training_eigenvectors_lda.convertTo(Mat_training_eigenvectors_lda, CV_32FC1);
+	Mat Mat_training_data_lda = (Mat_training_data_pca * Mat_training_eigenvectors_lda);
+	Mat Mat_testing_data_lda = (Mat_testing_data_pca * Mat_training_eigenvectors_lda);
+	vector<int>().swap(vector_labels);
+	
+	//使用LDA與使用貝葉斯分類
+	if (DO_LDA == true && CLASSIFIER_USE == 0) {
+		bayes_classifier(Mat_training_data_lda, Mat_testing_data_lda);
+	}
+	//使用LDA與使用KNN分類(曼哈頓距離)
+	else if (DO_LDA == true && CLASSIFIER_USE == 1) {
+		knn_classifier(Mat_training_data_lda, Mat_testing_data_lda);
+	}
+	//不使用LDA與使用貝葉斯分類
+	else if (DO_LDA == false && CLASSIFIER_USE == 0) {
+		bayes_classifier(Mat_training_data_pca, Mat_testing_data_pca);
+	}
+	//不使用LDA與使用KNN分類(曼哈頓距離)
+	else if (DO_LDA == false && CLASSIFIER_USE == 1) {
+		knn_classifier(Mat_training_data_pca, Mat_testing_data_pca);
+	}
+	else {
+		cout << "參數設定錯誤" << endl;
+	}
+	
+	system("pause");
+	return 0;
+}
